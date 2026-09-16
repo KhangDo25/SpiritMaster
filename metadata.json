@@ -1,0 +1,6 @@
+{
+  "name": "Linh Thú Hội",
+  "description": "Linh Thú Hội - Mythological Spirit Action Roguelite Arena with Real-time Combat & Multiplayer Arena",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

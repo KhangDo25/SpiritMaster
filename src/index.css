@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-game-bg: #0a0a0c;
+  --color-game-panel: #141419;
+  --color-game-primary: #d4af37;
+  --color-game-secondary: #c23b22;
+  --color-game-text: #e0e0e0;
+  --color-game-text-muted: #888888;
+}
+
+body {
+  background-color: var(--color-game-bg);
+  color: var(--color-game-text);
+  font-family: 'Cinzel', 'Trajan Pro', serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Mobile-first touch control optimizations */
+.game-viewport {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
