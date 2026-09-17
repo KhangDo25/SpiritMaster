@@ -26,7 +26,6 @@ import { battlePassRouter } from "./server/routes/battlepass.routes";
 import { profileRouter } from "./server/routes/profile.routes";
 import { setupSocketIO } from "./server/socket";
 import { seedDemoUsers } from "./server/db/seedDemoUsers";
-import { seedTestUsers } from "./server/db/seedTestUsers";
 import { seedAll } from "./server/db/seedAll";
 import { dbStatus } from "./server/db";
 import { mysqlStatus, checkMysqlConnection, ensureMysqlAuthTables, getMysqlPool } from "./server/db/mysql";
@@ -36,7 +35,7 @@ function shouldSeedDemoUsers(): boolean {
   return String(process.env.SEED_DEMO_USERS || '').toLowerCase() === 'true';
 }
 
-async function startServer() {
+async function startServer(): Promise<express.Express> {
   const app = express();
   const server = createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
@@ -51,26 +50,39 @@ async function startServer() {
   
   setupSocketIO(io);
 
-  // Ensure database tables, catalog data and demo accounts are seeded BEFORE handling requests
-  try {
-    await seedAll();
+  // Ensure database tables, catalog data and demo accounts are seeded BEFORE handling requests.
+  // Seeding is intended for local development only; in Vercel serverless deployments the
+  // tables/spirits/etc. are expected to already exist (migrations run separately), and running
+  // heavy catalog inserts on every cold start would both slow requests and risk table-missing errors.
+  if (!process.env.VERCEL) {
+    try {
+      await seedAll();
+      if (getMysqlPool()) {
+        await checkMysqlConnection();
+        await ensureMysqlAuthTables();
+        console.log("[Database] Aiven MySQL auth tables verified (users, user_profiles).");
+      }
+      if (shouldSeedDemoUsers()) {
+        await seedDemoUsers();
+        console.log("[Database] Demo users seeded (SEED_DEMO_USERS=true).");
+      } else {
+        console.log("[Database] Demo-user seeding skipped (production auth uses real accounts only).");
+      }
+      console.log("[Database] All catalogs seeded successfully.");
+    } catch (err) {
+      console.error("[Database] Seeding notice:", err);
+    }
+  } else {
+    console.log("[Database] Catalog seeding skipped in Vercel deployment (production data assumed migrated).");
     if (getMysqlPool()) {
-      await checkMysqlConnection();
-      await ensureMysqlAuthTables();
-      console.log("[Database] Aiven MySQL auth tables verified (users, user_profiles).");
+      try {
+        await checkMysqlConnection();
+        await ensureMysqlAuthTables();
+        console.log("[Database] Aiven MySQL auth tables verified (users, user_profiles).");
+      } catch (err) {
+        console.error("[Database] MySQL auth table verification skipped:", err);
+      }
     }
-    if (shouldSeedDemoUsers()) {
-      await seedDemoUsers();
-      console.log("[Database] Demo users seeded (SEED_DEMO_USERS=true).");
-    } else {
-      console.log("[Database] Demo-user seeding skipped (production auth uses real accounts only).");
-    }
-    // Opt-in QA accounts: real rows in the active auth store, brand-new state.
-    // Self-gated by SEED_TEST_USERS / SEED_TEST_PASSWORD (see seedTestUsers.ts).
-    await seedTestUsers();
-    console.log("[Database] All catalogs seeded successfully.");
-  } catch (err) {
-    console.error("[Database] Seeding notice:", err);
   }
 
   app.set('trust proxy', 1); // Trust first proxy for rate limiter
@@ -159,10 +171,20 @@ async function startServer() {
     });
   }
 
-  server.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
+  // On Vercel the platform owns the HTTP listener and invokes the exported
+  // handler from api/index.ts instead; only bind a port when running locally
+  // (`npm run dev` / `npm start`).
+  if (!process.env.VERCEL) {
+    server.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
+
+  return app;
 }
 
-startServer();
+// Resolves once middleware, routers and catalog seeding are ready.
+// Consumed by the Vercel serverless entrypoint (api/index.ts) so the first
+// request can never arrive before the Express routes are registered.
+export const appReady = startServer();
 
