@@ -1,4 +1,4 @@
-import { appReady } from "../server";
+import { appReady } from "../server.ts";
 import type { Request, Response } from "express";
 
 let appP: Promise<import("express").Express> | null = appReady;
