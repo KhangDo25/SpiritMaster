@@ -173,10 +173,16 @@ authRouter.post('/login', async (req, res, next) => {
         res.status(401).json(apiResponse(false, "Mật khẩu không đúng", null, "INVALID_CREDENTIALS"));
         return;
       }
-      // Session + JWT are enough for /api/auth/me to identify this user.
-      const session = await createAuthSession(mockAccount.id, mockAccount.username);
       const token = issueJwt(mockAccount.id, mockAccount.username);
-      res.cookie('session_id', session.sid, sessionCookieOptions());
+
+      res.cookie('token', token, {
+        httpOnly: true,
+        secure: isProduction(),
+        sameSite: (isProduction() ? 'none' : 'lax') as 'none' | 'lax',
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/',
+      });
+
       res.json(apiResponse(true, "Login successful", {
         user: safeUser(mockAccount),
         token,
