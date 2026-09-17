@@ -49,6 +49,63 @@ function normalizeLogin(body: any): { login: string; password: string } {
   return { login, password: String(body.password || '') };
 }
 
+// ==========================================================================
+// HARDCODED MOCK ACCOUNTS (QA / local test accounts)
+// --------------------------------------------------------------------------
+// These two accounts are validated with a plain string comparison directly in
+// the /login route. They never query SQLite / MySQL and never need a seed
+// script, so they keep working even with an empty database.
+//   User 1: username "khang"  - email "khang@linhthuhoi.com"
+//   User 2: username "thư"    - email "thu@linhthuhoi.com"
+//   Accepted passwords: "08082023" or "882003"
+// Set MOCK_LOGIN_ENABLED=false to disable them (recommended for production).
+// ==========================================================================
+export interface MockAccount {
+  id: string;
+  userId: string;
+  username: string;
+  email: string;
+}
+
+/** Plaintext passwords accepted by the mock accounts (compared directly). */
+export const MOCK_PASSWORDS: readonly string[] = ['08082023', '882003'];
+
+/** Stable in-code identities: no DB row (and no random UUID) is required. */
+export const MOCK_ACCOUNTS: readonly MockAccount[] = [
+  { id: 'mock-user-khang', userId: 'mock-user-khang', username: 'khang', email: 'khang@linhthuhoi.com' },
+  { id: 'mock-user-thu', userId: 'mock-user-thu', username: 'thư', email: 'thu@linhthuhoi.com' },
+];
+
+function mockLoginEnabled(): boolean {
+  return String(process.env.MOCK_LOGIN_ENABLED ?? 'true').toLowerCase() !== 'false';
+}
+
+/** Trims and lower-cases a login string so matching ignores case and spacing. */
+function normalizeIdentity(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+/** Case-insensitive lookup by username OR email among the hardcoded accounts. */
+export function findMockAccount(login: unknown): MockAccount | undefined {
+  const key = normalizeIdentity(login);
+  if (!key) return undefined;
+  return MOCK_ACCOUNTS.find(
+    (account) => normalizeIdentity(account.username) === key || normalizeIdentity(account.email) === key
+  );
+}
+
+/** Case-insensitive lookup by the hardcoded user id (used by /api/auth/me). */
+export function findMockAccountById(userId: unknown): MockAccount | undefined {
+  const key = normalizeIdentity(userId);
+  if (!key) return undefined;
+  return MOCK_ACCOUNTS.find((account) => normalizeIdentity(account.id) === key);
+}
+
+/** Direct plaintext comparison - no hashing, no database round-trip. */
+export function isMockPassword(password: unknown): boolean {
+  return MOCK_PASSWORDS.includes(String(password ?? ''));
+}
+
 
 authRouter.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
@@ -101,9 +158,43 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
   }
 });
 
-authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
+authRouter.post('/login', async (req, res, next) => {
   try {
-    const { login, password } = normalizeLogin(req.body);
+    const { login, password } = normalizeLogin(req.body || {});
+
+    // ======================================================================
+    // 1) HARDCODED MOCK ACCOUNTS - matched by username OR email (case
+    //    insensitive) and validated with a plain string comparison.
+    //    No SQLite query, no bcrypt, no seed script: works with an empty DB.
+    // ======================================================================
+    const mockAccount = mockLoginEnabled() ? findMockAccount(login) : undefined;
+    if (mockAccount) {
+      if (!isMockPassword(password)) {
+        res.status(401).json(apiResponse(false, "Mật khẩu không đúng", null, "INVALID_CREDENTIALS"));
+        return;
+      }
+      // Session + JWT are enough for /api/auth/me to identify this user.
+      const session = await createAuthSession(mockAccount.id, mockAccount.username);
+      const token = issueJwt(mockAccount.id, mockAccount.username);
+      res.cookie('session_id', session.sid, sessionCookieOptions());
+      res.json(apiResponse(true, "Login successful", {
+        user: safeUser(mockAccount),
+        token,
+        isMock: true,
+      }));
+      return;
+    }
+
+    // ======================================================================
+    // 2) Regular accounts: unchanged DB flow (SQLite dev store / Aiven MySQL).
+    // ======================================================================
+    const parsed = loginSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json(apiResponse(false, "Validation failed", parsed.error.issues, "VALIDATION_ERROR"));
+      return;
+    }
+    req.body = parsed.data;
+
     const generic = new BusinessException("Invalid username or password", 401, "INVALID_CREDENTIALS");
 
     if (mysqlAuthActive()) {
@@ -153,6 +244,51 @@ authRouter.post('/logout', async (req, res) => {
 authRouter.get('/me', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!.userId;
+
+    // ======================================================================
+    // HARDCODED MOCK ACCOUNTS: identity comes from code, never from the DB.
+    // Progression (profile + starter spirit) is still read best-effort from
+    // the active store so in-game coins/spirits keep working, and a safe
+    // default profile is returned (never a 404) when no row exists yet.
+    // ======================================================================
+    const mockAccount = mockLoginEnabled() ? findMockAccountById(userId) : undefined;
+    if (mockAccount) {
+      let mockProfile: any = null;
+      let mockHasStarter = false;
+
+      try {
+        if (mysqlAuthActive()) {
+          mockProfile = await MysqlUserStore.getProfile(userId);
+          mockHasStarter = (await MysqlUserStore.countStarterSpirits(userId)) > 0;
+        } else {
+          mockProfile = await UserProfileRepository.getProfileByUserId(userId);
+          const mockSpirits = await db.select().from(userSpirits).where(eq(userSpirits.userId, userId));
+          mockHasStarter = mockSpirits.length > 0;
+        }
+      } catch (err) {
+        console.warn('[Auth] Mock account progression lookup skipped (store unavailable):', err);
+      }
+
+      res.json(apiResponse(true, "User profile retrieved", {
+        id: mockAccount.id,
+        userId: mockAccount.id,
+        username: mockAccount.username,
+        email: mockAccount.email,
+        profile: mockProfile ?? {
+          displayName: mockAccount.username,
+          avatarUrl: null,
+          coins: 0,
+          level: 1,
+          stats: { matchesPlayed: 0, wins: 0, totalXPEarned: 0 },
+          currentStreak: 0,
+          longestStreak: 0
+        },
+        hasStarter: mockHasStarter,
+        isMock: true
+      }));
+      return;
+    }
+
     let user: { id: string; username: string; email: string } | null = null;
     let profile: any = null;
     let hasStarter = false;
