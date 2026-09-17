@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import bcrypt from 'bcryptjs';
 import { getMysqlPool, checkMysqlConnection, ensureMysqlAuthTables, mysqlStatus } from './mysql';
 import { MysqlUserStore, mysqlAuthActive } from './repositories/MysqlUserStore';
 import { UserRepository } from './repositories/UserRepository';
@@ -15,12 +16,17 @@ import { UserProfileRepository } from './repositories/UserProfileRepository';
  *
  * Enable with:
  *   SEED_TEST_USERS="khang,thư"
- *   SEED_TEST_PASSWORD="882003"
+ *   SEED_TEST_PASSWORD="08082023"
  *
  * Behaviour:
  *  - Runs at server start (see server.ts) against the active auth store.
  *  - Also runnable standalone: npm run db:seed:test.
- *  - Idempotent: existing accounts are skipped, never overwritten.
+ *  - Idempotent: accounts are created once and never duplicated.
+ *  - Credential self-heal (SEED_TEST_PASSWORD_SYNC, default true): if a
+ *    configured test account already exists but its stored hash does not
+ *    match SEED_TEST_PASSWORD, the hash is rotated so the documented QA
+ *    credentials always work. Set SEED_TEST_PASSWORD_SYNC=false to restore
+ *    strict create-once/never-overwrite behaviour.
  *  - Refuses to run when NODE_ENV=production unless
  *    ALLOW_TEST_SEED_IN_PRODUCTION=true is set deliberately.
  *  - Passwords are NEVER logged, returned, or stored in plaintext.
@@ -35,6 +41,7 @@ export interface TestSeedResult {
   target: 'Aiven MySQL' | 'Local dev store';
   created: string[];
   existing: string[];
+  updated: string[];
   failed: { username: string; reason: string }[];
   skipped: string;
 }
@@ -83,18 +90,27 @@ function targetLabel(): 'Aiven MySQL' | 'Local dev store' {
   return mysqlAuthActive() ? 'Aiven MySQL' : 'Local dev store';
 }
 
+/** Default true: keep SEED_TEST_PASSWORD authoritative for configured QA accounts. */
+function passwordSyncEnabled(): boolean {
+  return String(process.env.SEED_TEST_PASSWORD_SYNC ?? 'true').toLowerCase() !== 'false';
+}
+
 /**
  * Creates the configured test accounts in the active auth store.
- * Safe to call on every boot: existing accounts are left untouched.
+ * Safe to call on every boot: accounts are created once, and (unless
+ * SEED_TEST_PASSWORD_SYNC=false) an out-of-date hash is rotated so the
+ * configured SEED_TEST_PASSWORD always logs in.
  */
 export async function seedTestUsers(): Promise<TestSeedResult> {
   const rawUsers = String(process.env.SEED_TEST_USERS || '').trim();
   const password = String(process.env.SEED_TEST_PASSWORD || '');
+  const syncPassword = passwordSyncEnabled();
 
   const result: TestSeedResult = {
     target: targetLabel(),
     created: [],
     existing: [],
+    updated: [],
     failed: [],
     skipped: '',
   };
@@ -131,8 +147,30 @@ export async function seedTestUsers(): Promise<TestSeedResult> {
         : (await UserRepository.findByUsername(spec.username)) || (await UserRepository.findByEmail(spec.email));
 
       if (existing) {
-        result.existing.push(spec.username);
-        console.log(`[TestSeed] Account '${spec.username}' already exists on ${result.target} - skipped (untouched).`);
+        // Credential self-heal: rotate the hash when the configured QA password
+        // no longer matches (e.g. SEED_TEST_PASSWORD changed after the fact).
+        if (!syncPassword) {
+          result.existing.push(spec.username);
+          console.log(`[TestSeed] Account '${spec.username}' already exists on ${result.target} - skipped (untouched, SEED_TEST_PASSWORD_SYNC=false).`);
+          continue;
+        }
+
+        const passwordMatches = await bcrypt.compare(password, existing.passwordHash);
+        if (passwordMatches) {
+          result.existing.push(spec.username);
+          console.log(`[TestSeed] Account '${spec.username}' already exists on ${result.target} - skipped (password already matches SEED_TEST_PASSWORD).`);
+          continue;
+        }
+
+        if (useMysql) {
+          await MysqlUserStore.updatePassword(existing.id, password);
+        } else {
+          await UserRepository.updatePassword(existing.id, password);
+        }
+        result.updated.push(spec.username);
+        console.log(
+          `[TestSeed] Rotated password hash for existing account '${spec.username}' on ${result.target} so it matches SEED_TEST_PASSWORD.`
+        );
         continue;
       }
 
@@ -166,7 +204,7 @@ export async function seedTestUsers(): Promise<TestSeedResult> {
   }
 
   console.log(
-    `[TestSeed] Summary (${result.target}): created=${result.created.length}, existing=${result.existing.length}, failed=${result.failed.length}. Passwords stored as bcrypt hashes only.`
+    `[TestSeed] Summary (${result.target}): created=${result.created.length}, existing=${result.existing.length}, updated=${result.updated.length}, failed=${result.failed.length}. Passwords stored as bcrypt hashes only.`
   );
 
   return result;
@@ -177,7 +215,7 @@ async function runCli(): Promise<void> {
   if (!rawUsers) {
     console.error(
       '[TestSeed] SEED_TEST_USERS is required. Example:\n' +
-        '  SEED_TEST_USERS="khang,thư" SEED_TEST_PASSWORD="882003" npm run db:seed:test'
+        '  SEED_TEST_USERS="khang,thư" SEED_TEST_PASSWORD="08082023" npm run db:seed:test'
     );
     process.exit(1);
   }
@@ -208,7 +246,8 @@ async function runCli(): Promise<void> {
 
   const result = await seedTestUsers();
   if (result.skipped) console.warn(`[TestSeed] ${result.skipped}`);
-  const ok = result.failed.length === 0 && (result.created.length + result.existing.length) > 0;
+  const ok = result.failed.length === 0 &&
+    (result.created.length + result.existing.length + result.updated.length) > 0;
   process.exit(ok ? 0 : 1);
 }
 

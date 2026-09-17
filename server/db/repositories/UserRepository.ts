@@ -52,4 +52,17 @@ export class UserRepository {
 
     return id;
   }
+
+  /**
+   * Rotates the stored password hash for an existing local dev account.
+   * Used by the opt-in QA seeding to keep SEED_TEST_PASSWORD authoritative.
+   * Passwords are always stored as bcrypt hashes (cost 12), never plaintext.
+   */
+  static async updatePassword(id: string, password: string) {
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
+    await db.update(users)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(users.id, id));
+  }
 }

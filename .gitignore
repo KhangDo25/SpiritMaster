@@ -4,7 +4,8 @@ dist/
 coverage/
 .DS_Store
 *.log
-.env*
+.env
+
 !.env.example
 
 # Local dev data (DEV_SQLITE_PATH) — never production data
@@ -12,3 +13,5 @@ coverage/
 *.sqlite
 *.sqlite3
 dev.sqlite*
+.env
+.env.local

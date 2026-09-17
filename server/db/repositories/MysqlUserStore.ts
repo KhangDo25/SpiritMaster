@@ -94,6 +94,18 @@ export class MysqlUserStore {
     return id;
   }
 
+  /**
+   * Rotates the stored password hash for an existing account.
+   * Used by the opt-in QA seeding to keep SEED_TEST_PASSWORD authoritative.
+   * Passwords are always stored as bcrypt hashes (cost 12), never plaintext.
+   */
+  static async updatePassword(userId: string, password: string): Promise<void> {
+    const pool = getMysqlPool();
+    if (!pool) throw new BusinessException('Authentication database is not configured', 503, 'DB_NOT_CONFIGURED');
+    const passwordHash = await bcrypt.hash(password, 12);
+    await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, userId]);
+  }
+
   static async getProfile(userId: string): Promise<any | null> {
     const pool = getMysqlPool();
     if (!pool) return null;
