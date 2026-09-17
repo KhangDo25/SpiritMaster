@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { setAuthToken } from '../utils/auth';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Maps realms to specific colors and symbols
@@ -45,33 +46,37 @@ export default function SelectSpirit() {
   }, [user, navigate]);
 
   const handleSummon = async () => {
-    if (!selectedId) return;
-    setIsSummoning(true);
-    setError('');
+  if (!selectedId) return;
+  setIsSummoning(true);
+  setError('');
 
-    try {
-      const res = await fetch('/api/spirits/select-starter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ spiritId: selectedId })
-      });
-      const data = await res.json();
-      
-      if (data.success) {
-        // Wait for summon animation
-        setTimeout(async () => {
-          await checkAuth(); // Update user object to show hasStarter = true
-          navigate('/dashboard');
-        }, 3000);
-      } else {
-        setError(data.message || 'Failed to summon');
-        setIsSummoning(false);
+  try {
+    const res = await fetch('/api/spirits/select-starter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spiritId: selectedId })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      if (data.data?.token) {
+        setAuthToken(data.data.token);
       }
-    } catch (err) {
-      setError('An error occurred during summoning.');
+
+      setTimeout(async () => {
+        await checkAuth();
+        navigate('/dashboard');
+      }, 3000);
+    } else {
+      setError(data.message || 'Failed to summon');
       setIsSummoning(false);
     }
-  };
+  } catch (err) {
+    setError('An error occurred during summoning.');
+    setIsSummoning(false);
+  }
+};
 
   const selectedSpirit = spirits.find(s => s.id === selectedId);
 

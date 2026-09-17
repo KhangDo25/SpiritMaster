@@ -30,12 +30,19 @@ function findAccount(login: unknown) {
   );
 }
 
-function createToken(userId: string, username: string): string {
+function createToken(
+  userId: string,
+  username: string,
+  hasStarter = false,
+  starterSpiritId?: string
+): string {
   return jwt.sign(
     {
       userId,
       id: userId,
       username,
+      hasStarter,
+      starterSpiritId,
     },
     getJwtSecret(),
     {
@@ -87,7 +94,6 @@ export default function handler(
     return;
   }
 
-  // POST /api/auth/login
   if (
     req.method === "POST" &&
     (path === "/api/auth/login" ||
@@ -143,7 +149,6 @@ export default function handler(
     return;
   }
 
-  // GET /api/auth/me
   if (
     req.method === "GET" &&
     (path === "/api/auth/me" ||
@@ -168,6 +173,8 @@ export default function handler(
         userId?: string;
         id?: string;
         username?: string;
+        hasStarter?: boolean;
+        starterSpiritId?: string;
       };
 
       const userId = decoded.userId || decoded.id;
@@ -196,7 +203,8 @@ export default function handler(
           profile: {
             displayName: account.username,
           },
-          hasStarter: false,
+          hasStarter: decoded.hasStarter === true,
+          starterSpiritId: decoded.starterSpiritId,
           isMock: true,
         },
       });
@@ -218,7 +226,6 @@ export default function handler(
     }
   }
 
-  // POST /api/auth/logout
   if (
     req.method === "POST" &&
     (path === "/api/auth/logout" ||
