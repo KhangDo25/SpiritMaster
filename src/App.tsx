@@ -11,7 +11,6 @@ import { AppLayout } from './components/layout/AppLayout';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import SelectSpirit from './pages/SelectSpirit';
 import SinglePlayer from './pages/SinglePlayer';
 import Collection from './pages/Collection';
 import BossRun from './pages/BossRun';
@@ -36,7 +35,6 @@ export default function App() {
 
           {/* Protected Routes inside AppLayout */}
           <Route element={<ProtectedRoute />}>
-            <Route path="/select-spirit" element={<SelectSpirit />} />
             
             <Route element={<AppLayout />}>
               <Route path="/dashboard" element={<Dashboard />} />

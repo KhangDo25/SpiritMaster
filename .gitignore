@@ -18,3 +18,5 @@ dev.sqlite*
 
 .vercel
 .env*
+cookies-*.txt
+nul
